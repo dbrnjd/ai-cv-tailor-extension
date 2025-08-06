@@ -1,4 +1,4 @@
-\# AI CV Tailor – Chrome Extension
+# AI CV Tailor – Chrome Extension
 
 
 
@@ -6,7 +6,7 @@
 
 
 
-\## 🚀 What It Does
+## 🚀 What It Does
 
 
 
@@ -26,7 +26,7 @@ This Chrome extension allows you to:
 
 
 
-\## 🛠 Tech Stack
+## 🛠 Tech Stack
 
 
 
@@ -42,7 +42,7 @@ This Chrome extension allows you to:
 
 
 
-\## 📦 How to Use
+## 📦 How to Use
 
 
 
@@ -60,7 +60,7 @@ This Chrome extension allows you to:
 
 
 
-\## 💡 Roadmap
+## 💡 Roadmap
 
 
 
@@ -76,7 +76,7 @@ This Chrome extension allows you to:
 
 
 
-\## 🙌 Contribute
+## 🙌 Contribute
 
 
 
