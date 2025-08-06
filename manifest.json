@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "CV Tailor with Groq",
+  "version": "1.0",
+  "description": "Tailor your CV to job descriptions using Groq's LLM",
+  "icons": {
+    "128": "icon.png"
+  },
+  "permissions": [
+    "contextMenus",
+    "storage", 
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "web_accessible_resources": [{
+    "resources": ["libs/jspdf.umd.min.js"],
+    "matches": ["<all_urls>"]
+  }]
+}

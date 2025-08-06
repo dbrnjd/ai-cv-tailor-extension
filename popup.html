@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Tailor My CV</title>
+</head>
+<body>
+  <h2>Upload Your CV (PDF)</h2>
+  <input type="file" id="cvFile" accept="application/pdf" />
+  <p id="uploadStatus"></p>
+
+  <h2>Enter Groq API Key</h2>
+  <input type="text" id="groqKey" placeholder="Paste your Groq API key here" />
+  <button id="saveKey">Save API Key</button>
+  <p id="keyStatus"></p>
+
+  <h2>Tailored CV</h2>
+  <button id="downloadBtn">Download Tailored CV</button>
+  <p id="downloadStatus"></p>
+
+  <script src="libs/pdf.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
