@@ -1,3 +1,5 @@
+importScripts("libs/pdf-lib.min.js");
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "tailorCV",
@@ -5,14 +7,6 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ["selection"]
   });
 });
-
-function notifyTab(tabId, message) {
-  chrome.scripting.executeScript({
-    target: { tabId },
-    func: (msg) => window.alert(msg),
-    args: [message]
-  });
-}
 
 async function getGroqKey() {
   const result = await chrome.storage.local.get("groqKey");
@@ -26,16 +20,24 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const { baseCV } = await chrome.storage.local.get("baseCV");
   const groqKey = await getGroqKey();
 
-  if (!baseCV) return notifyTab(tab.id, "Please upload your base CV first via the extension popup.");
-  if (!groqKey) return notifyTab(tab.id, "Groq API key missing. Please enter it in the extension popup.");
+  if (!baseCV || !groqKey) {
+    chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: (msg) => alert(msg),
+      args: [!baseCV ? "Please upload your base CV first via the extension popup." : "Groq API key missing. Please enter it in the extension popup."]
+    });
+    return;
+  }
 
-  const prompt = `You are an AI assistant. Customize the CV below to match the job description. Focus on relevant experience, skills, and keywords.
+  const prompt = `
+You are an AI assistant. Customize the CV below to match the job description. Focus on relevant experience, skills, and keywords. Remove irrelevant parts and output the final result in clean, structured format suitable for a UK CV (no explanation).
 
 Job Description:
 ${jobDescription}
 
 CV:
-${baseCV}`;
+${baseCV}
+`;
 
   try {
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -51,24 +53,51 @@ ${baseCV}`;
       })
     });
 
-    if (!response.ok) {
-      const err = await response.json();
-      console.error("Groq API error:", JSON.stringify(err, null, 2));
-      const message = err.error?.message || "Unknown error";
-      notifyTab(tab.id, `Groq Error: ${message}`);
-      return;
+    const data = await response.json();
+
+    if (!response.ok || !data.choices || !data.choices[0]?.message?.content) {
+      throw new Error(data?.error?.message || "No response from Groq");
     }
 
-    const completion = await response.json();
-    const tailoredCV = completion.choices[0].message.content;
+    const tailoredCV = data.choices[0].message.content.trim();
 
-    // Save tailored CV for download via popup
-    chrome.storage.local.set({ tailoredCV }, () => {
-      notifyTab(tab.id, "Tailored CV generated! Open the extension popup to download.");
+    // Generate PDF using pdf-lib
+    const { PDFDocument, StandardFonts, rgb } = PDFLib;
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([595, 842]); // A4 size
+
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const fontSize = 12;
+    const margin = 50;
+    let y = page.getHeight() - margin;
+
+    const lines = tailoredCV.split("\n");
+    for (let line of lines) {
+      if (y < margin) {
+        const newPage = pdfDoc.addPage([595, 842]);
+        y = newPage.getHeight() - margin;
+      }
+      page.drawText(line, {
+        x: margin,
+        y: y,
+        size: fontSize,
+        font,
+        color: rgb(0, 0, 0)
+      });
+      y -= fontSize + 4;
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const base64 = btoa(String.fromCharCode(...pdfBytes));
+
+    const dataUrl = "data:application/pdf;base64," + base64;
+
+    chrome.downloads.download({
+      url: dataUrl,
+      filename: "Tailored_CV.pdf"
     });
 
   } catch (err) {
-    console.error("Unexpected error:", err);
-    notifyTab(tab.id, "Failed to generate tailored CV.");
+    console.error("Error generating tailored CV:", err.message);
   }
 });
