@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AI CV Tailor - Settings</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 15px; }
+    label { display: block; margin-top: 10px; }
+    input, button { margin-top: 5px; padding: 6px; width: 100%; }
+  </style>
+</head>
+<body>
+  <h2>Settings</h2>
+
+  <label for="groqKey">Groq API Key:</label>
+  <input type="text" id="groqKey" placeholder="Enter Groq API Key">
+
+  <label for="cvFile">Upload Base CV (PDF):</label>
+  <input type="file" id="cvFile" accept="application/pdf">
+
+  <p id="status"></p>
+
+  <button id="saveBtn">Save Settings</button>
+
+  <script src="libs/pdf.min.js"></script>
+  <script src="libs/jspdf.umd.min.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

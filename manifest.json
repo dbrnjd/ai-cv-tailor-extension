@@ -1,26 +1,24 @@
 {
-  "name": "Tailor CV",
-  "version": "1.0",
   "manifest_version": 3,
-  "description": "Tailors CVs to job descriptions using AI",
-  "permissions": ["contextMenus", "storage", "scripting", "downloads"],
-  "host_permissions": ["<all_urls>"],
+  "name": "AI CV Tailor",
+  "version": "1.0",
+  "description": "Tailor your CV to job postings using Groq AI and UK ATS standards.",
+  "permissions": [
+    "storage",
+    "contextMenus",
+    "scripting",
+    "downloads"
+  ],
+  "host_permissions": [
+    "*://*/*"
+  ],
+  "action": {},
+  "options_page": "settings.html",
   "background": {
     "service_worker": "background.js"
   },
-  "action": {
-    "default_popup": "popup.html",
-    "default_icon": "icon.png"
-  },
   "icons": {
-    "16": "icon.png",
     "48": "icon.png",
     "128": "icon.png"
-  },
-  "web_accessible_resources": [
-    {
-      "resources": ["libs/pdf-lib.min.js"],
-      "matches": ["<all_urls>"]
-    }
-  ]
+  }
 }
