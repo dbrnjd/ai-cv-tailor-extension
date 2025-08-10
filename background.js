@@ -1,23 +1,17 @@
 // background.js — service worker for Tailor CV
 // Requirements: libs/jspdf.umd.min.js must exist in extension's libs/ folder
 
-// Load jsPDF UMD into service worker (synchronous)
 importScripts("libs/jspdf.umd.min.js");
 
-// Grab constructor
 const jsPDFCtor = (self.jspdf && self.jspdf.jsPDF) ? self.jspdf.jsPDF : null;
 if (!jsPDFCtor) {
   console.error("jsPDF not loaded. Put libs/jspdf.umd.min.js in the libs/ folder.");
 }
 
-// --- Helpers ---------------------------------------------------------------
-
-// promisified storage.get
 function storageGet(keys) {
   return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
 }
 
-// notify (alert) inside the tab
 function notifyTab(tabId, message) {
   try {
     chrome.scripting.executeScript({
@@ -30,11 +24,10 @@ function notifyTab(tabId, message) {
   }
 }
 
-// Convert ArrayBuffer -> base64 data URL (safe in SW)
 function arrayBufferToDataUrl(arrayBuffer, mime = "application/pdf") {
   const uint8 = new Uint8Array(arrayBuffer);
   let binary = "";
-  const chunkSize = 0x8000; // 32KB chunks to avoid call stack issues
+  const chunkSize = 0x8000;
   for (let i = 0; i < uint8.length; i += chunkSize) {
     const sub = uint8.subarray(i, i + chunkSize);
     binary += String.fromCharCode.apply(null, sub);
@@ -43,64 +36,49 @@ function arrayBufferToDataUrl(arrayBuffer, mime = "application/pdf") {
   return `data:${mime};base64,${base64}`;
 }
 
-// Detect heading lines (common CV headings)
 function isHeading(line) {
   if (!line) return false;
   const norm = line.trim().replace(/:$/, "").toLowerCase();
   const headings = [
-    "name", "name & contact", "contact", "profile", "summary", "personal statement",
-    "skills", "key skills", "experience", "work experience",
-    "education", "certifications", "certifications & training", "projects"
+    "summary", "personal statement", "skills", "key skills", "experience", "work experience",
+    "project", "projects", "education", "certifications", "certifications & training"
   ];
   return headings.includes(norm) || headings.some(h => norm.startsWith(h));
 }
 
-// Detect bullet line
 function isBullet(line) {
   if (!line) return false;
   const t = line.trim();
   return t.startsWith("•") || t.startsWith("-") || t.startsWith("*") || /^\d+\./.test(t);
 }
 
-// Clean leading meta/explanatory text commonly returned by LLMs
 function stripModelIntro(text) {
   if (!text) return "";
-  // Remove upfront lines that look like "Here is...", "I've reformatted..." up to first heading
-  // Find first heading index (case-insensitive)
-  const lower = text.toLowerCase();
-  const headings = ["name", "name & contact", "profile", "summary", "skills", "experience", "education"];
-  let idx = -1;
-  for (const h of headings) {
-    const i = lower.indexOf("\n" + h);
-    if (i !== -1) idx = (idx === -1) ? i : Math.min(idx, i);
-  }
-  // Fallback: search headings at start of text (without newline)
-  if (idx === -1) {
-    for (const h of headings) {
-      const i = lower.indexOf(h);
-      if (i !== -1) idx = (idx === -1) ? i : Math.min(idx, i);
+  const introductoryPhrases = [
+    /^here is the rewritten cv:\s*/i,
+    /^based on the information provided, here is a tailored cv:\s*/i,
+    /^i have updated your cv based on the job description:\s*/i,
+    /^below is the updated cv:\s*/i,
+  ];
+
+  for (const phrase of introductoryPhrases) {
+    if (phrase.test(text)) {
+      return text.replace(phrase, '').trim();
     }
   }
-  if (idx > 0) {
-    text = text.slice(idx);
+
+  const firstHeadingMatch = text.match(/^(summary|skills|project|projects|work experience|certifications|education)/i);
+  if (firstHeadingMatch) {
+    const headingIndex = text.indexOf(firstHeadingMatch[0]);
+    if (headingIndex > 0) {
+      return text.substring(headingIndex).trim();
+    }
   }
-  // Remove common leading phrases
-  text = text.replace(/^(here('?s| is)|i have|i've|the revised cv|the tailored cv)[^\n]*\n*/i, "");
+  
   return text.trim();
 }
 
-// --- PDF rendering --------------------------------------------------------
-//
-// Render a clean, ATS-friendly UK CV using jsPDF. We will:
-//  - Render headings bold
-//  - Render bullets with "•"
-//  - Keep Skills right after Summary according to your preference
-//  - Keep Education at the end (prompt ensures order)
-//
-// This renderer is intentionally simple (no images) to remain ATS-friendly.
-//
-
-function renderCvToArrayBuffer(cvText) {
+function renderCvToArrayBuffer(cvText, personalDetails) {
   if (!jsPDFCtor) throw new Error("jsPDF not available");
 
   const doc = new jsPDFCtor({ unit: "pt", format: "a4" });
@@ -113,100 +91,232 @@ function renderCvToArrayBuffer(cvText) {
   const nameFontSize = 16;
   const bodyFontSize = 11;
   const lineGap = 6;
+  const sectionGap = 18;
+  const bulletIndent = 12;
+  const skillsColumnGap = 12;
+  const skillsVerticalGap = 4;
 
   let cursorY = margin;
 
-  // Normalize newlines, remove excess spaces
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(nameFontSize);
+  doc.text(personalDetails.fullName, margin, cursorY);
+  cursorY += nameFontSize + lineGap;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(bodyFontSize);
+  doc.text(personalDetails.jobTitle, margin, cursorY);
+  cursorY += bodyFontSize + lineGap;
+  
+  const contactInfo = [
+    personalDetails.phoneNumber,
+    personalDetails.email,
+    personalDetails.location,
+    personalDetails.linkedin
+  ];
+  if (personalDetails.github) {
+    contactInfo.push(personalDetails.github);
+  }
+  doc.text(contactInfo.join(" • "), margin, cursorY);
+  cursorY += bodyFontSize + lineGap;
+  
+  cursorY += sectionGap;
+
   const norm = cvText.replace(/\r/g, "");
   const lines = norm.split("\n");
+  
+  let currentParagraph = [];
+  let currentHeading = "";
+  let isProjectsSection = false;
+  let projectsBuffer = [];
+  let projectTitle = null;
+  let projectDescription = [];
 
-  // Function to write wrapped text and handle page breaks
-  function writeWrapped(text, fontSize = bodyFontSize, fontStyle = "normal", indent = 0) {
-    doc.setFont("helvetica", fontStyle);
-    doc.setFontSize(fontSize);
-    const availWidth = usableWidth - indent;
-    const wrapped = doc.splitTextToSize(text, availWidth);
-    for (const w of wrapped) {
-      if (cursorY > pageHeight - margin) {
-        doc.addPage();
-        cursorY = margin;
+  const flushParagraph = () => {
+    if (currentParagraph.length > 0) {
+      const paragraphText = currentParagraph.join(" ");
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(bodyFontSize);
+      const wrapped = doc.splitTextToSize(paragraphText, usableWidth);
+      for (const w of wrapped) {
+        if (cursorY > pageHeight - margin) {
+          doc.addPage();
+          cursorY = margin;
+        }
+        doc.text(w, margin, cursorY);
+        cursorY += bodyFontSize + lineGap;
       }
-      doc.text(w, margin + indent, cursorY);
-      cursorY += fontSize + lineGap;
+      currentParagraph = [];
+      cursorY += lineGap;
     }
-  }
+  };
 
-  // First pass: try to detect a top name/contact block: first non-empty line(s) before first heading
-  // We'll detect name as the first non-empty line (uppercase or capitalized) and treat it larger.
-  let i = 0;
-  // skip initial blank lines
-  while (i < lines.length && lines[i].trim() === "") i++;
+  const renderProjects = () => {
+    if (projectsBuffer.length > 0) {
+      for (const project of projectsBuffer) {
+        // Render project title in bold
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(bodyFontSize);
+        const wrappedTitle = doc.splitTextToSize(project.title, usableWidth);
+        for (const w of wrappedTitle) {
+          if (cursorY > pageHeight - margin) {
+            doc.addPage();
+            cursorY = margin;
+          }
+          doc.text(w, margin, cursorY);
+          cursorY += bodyFontSize + lineGap;
+        }
 
-  // If first line looks like a name (contains letters and spaces, short), render as name header
-  if (i < lines.length) {
-    const first = lines[i].trim();
-    if (first.length > 0 && first.length < 60) {
-      // render name
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(nameFontSize);
-      doc.text(first, margin, cursorY);
-      cursorY += nameFontSize + lineGap;
-      i++;
-      // collect subsequent short lines as contact until we hit an empty line
-      let contactLines = [];
-      while (i < lines.length && lines[i].trim() !== "") {
-        contactLines.push(lines[i].trim());
-        i++;
+        // Render description in normal font
+        if (project.description.length > 0) {
+          const descriptionText = project.description.join(" ");
+          doc.setFont("helvetica", "normal");
+          const wrappedDesc = doc.splitTextToSize(descriptionText, usableWidth);
+          for (const w of wrappedDesc) {
+            if (cursorY > pageHeight - margin) {
+              doc.addPage();
+              cursorY = margin;
+            }
+            doc.text(w, margin, cursorY);
+            cursorY += bodyFontSize + lineGap;
+          }
+        }
+        cursorY += lineGap; // Extra space between projects
       }
-      if (contactLines.length) {
-        writeWrapped(contactLines.join(" • "), bodyFontSize, "normal", 0);
-        cursorY += 4;
-      }
-      // skip blank(s)
-      while (i < lines.length && lines[i].trim() === "") i++;
+      projectsBuffer = [];
     }
-  }
+  };
+  
+  let skillsList = [];
+  const flushSkills = () => {
+    if (skillsList.length > 0) {
+      const numSkills = skillsList.length;
+      let numColumns = 1;
+      if (numSkills >= 15) numColumns = 3;
+      else if (numSkills >= 6) numColumns = 2;
 
-  // Process remaining lines (basic parsing: headings, bullets, paragraphs)
-  for (; i < lines.length; i++) {
-    const raw = lines[i];
-    const line = raw.replace(/\u2022/g, "•").trim();
+      const columnWidth = (usableWidth - skillsColumnGap * (numColumns - 1)) / numColumns;
+      const skillsPerColumn = Math.ceil(numSkills / numColumns);
+      
+      let columnStartY = cursorY;
+      
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(bodyFontSize);
+
+      for (let i = 0; i < numSkills; i++) {
+        const skillText = "• " + skillsList[i];
+        const colIndex = Math.floor(i / skillsPerColumn);
+        const rowIndex = i % skillsPerColumn;
+        
+        const xPos = margin + colIndex * (columnWidth + skillsColumnGap);
+        let yPos = columnStartY + rowIndex * (bodyFontSize + skillsVerticalGap);
+
+        if (yPos > pageHeight - margin) {
+            doc.addPage();
+            columnStartY = margin;
+            yPos = columnStartY + rowIndex * (bodyFontSize + skillsVerticalGap);
+        }
+        doc.text(skillText, xPos, yPos);
+      }
+      cursorY = Math.max(cursorY, columnStartY + skillsPerColumn * (bodyFontSize + skillsVerticalGap)) + lineGap;
+      skillsList = [];
+    }
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
 
     if (line === "") {
-      // paragraph break
-      cursorY += lineGap;
+      flushParagraph();
+      flushSkills();
+      if (isProjectsSection && projectTitle) {
+        projectsBuffer.push({ title: projectTitle, description: projectDescription });
+        projectTitle = null;
+        projectDescription = [];
+      }
       continue;
     }
 
     if (isHeading(line)) {
-      // render heading
+      flushParagraph();
+      flushSkills();
+      if (isProjectsSection) {
+        if (projectTitle) {
+          projectsBuffer.push({ title: projectTitle, description: projectDescription });
+        }
+        renderProjects();
+      }
+      cursorY += sectionGap;
       doc.setFont("helvetica", "bold");
       doc.setFontSize(headingFontSize);
-      if (cursorY > pageHeight - margin) {
-        doc.addPage();
-        cursorY = margin;
-      }
       doc.text(line.replace(/:$/, ""), margin, cursorY);
       cursorY += headingFontSize + 6;
+      currentHeading = line.toLowerCase().trim();
+      isProjectsSection = (currentHeading === "project" || currentHeading === "projects");
       continue;
     }
 
+    if (currentHeading.startsWith("skills") && isBullet(line)) {
+      skillsList.push(line.replace(/^[-*•\s]*\s*/, ""));
+      continue;
+    }
+    
+    // NEW LOGIC: Projects section parsing that handles titles and descriptions
+    if (isProjectsSection) {
+      const colonIndex = line.indexOf(':');
+      if (colonIndex !== -1) {
+        // This line contains a project title and description
+        if (projectTitle) {
+          // Push previous project to buffer before starting a new one
+          projectsBuffer.push({ title: projectTitle, description: projectDescription });
+        }
+        projectTitle = line.substring(0, colonIndex).trim().replace(/^[-*•\s]*\s*/, "");
+        projectDescription = [line.substring(colonIndex + 1).trim().replace(/^[-*•\s]*\s*/, "")];
+      } else if (projectTitle) {
+        // Subsequent lines are part of the description for the current project
+        projectDescription.push(line.trim());
+      } else {
+        // First line in projects section without a colon is the first title
+        projectTitle = line.trim().replace(/^[-*•\s]*\s*/, "");
+        projectDescription = [];
+      }
+      continue;
+    }
+    
     if (isBullet(line)) {
-      // render bullet with indentation
-      const bullet = line.replace(/^[-*•\s]*\s*/, "");
-      writeWrapped("• " + bullet, bodyFontSize, "normal", 12);
+      flushParagraph();
+      flushSkills();
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(bodyFontSize);
+      
+      const bulletText = line.replace(/^[-*•\s]*\s*/, "");
+      const wrapped = doc.splitTextToSize(bulletText, usableWidth - bulletIndent);
+      for (const w of wrapped) {
+        if (cursorY > pageHeight - margin) {
+          doc.addPage();
+          cursorY = margin;
+        }
+        doc.text("• " + w, margin + bulletIndent, cursorY);
+        cursorY += bodyFontSize + lineGap;
+      }
       continue;
     }
-
-    // else normal paragraph line
-    writeWrapped(line, bodyFontSize, "normal", 0);
+    
+    currentParagraph.push(line);
   }
-
-  // Return ArrayBuffer (safe to build Blob from this in SW)
+  
+  flushParagraph();
+  flushSkills();
+  if (isProjectsSection) {
+    if (projectTitle) {
+      projectsBuffer.push({ title: projectTitle, description: projectDescription });
+    }
+    renderProjects();
+  }
+  
   return doc.output("arraybuffer");
 }
 
-// --- Context menu setup ---------------------------------------------------
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "tailorCV",
@@ -215,7 +325,6 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-// --- Main handler ---------------------------------------------------------
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== "tailorCV") return;
   if (!tab?.id) return;
@@ -227,9 +336,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 
   try {
-    const store = await storageGet(["groqKey", "baseCV"]);
-    const groqKey = store.groqKey;
-    const baseCV = store.baseCV;
+    const store = await storageGet(["groqKey", "baseCV", "fullName", "jobTitle", "phoneNumber", "email", "location", "linkedin", "github"]);
+    const { groqKey, baseCV, fullName, jobTitle, phoneNumber, email, location, linkedin, github } = store;
 
     if (!groqKey) {
       notifyTab(tab.id, "Groq API key missing. Open extension settings and paste your key.");
@@ -239,22 +347,24 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       notifyTab(tab.id, "Base CV not found. Upload your base CV in the extension settings.");
       return;
     }
+    if (!fullName || !jobTitle || !phoneNumber || !email || !location || !linkedin) {
+      notifyTab(tab.id, "Personal details missing. Please fill in your name, job title, and contact info in the extension settings.");
+      return;
+    }
 
-    // Strict prompt: only return the CV content, ordered with Skills after Summary and Education last.
     const prompt = `You are a CV tailoring assistant. Take the provided CV and job description, then rewrite the CV to:
 - Match the role with relevant skills, experience, and keywords.
 - Maintain UK ATS-friendly standards.
-- Include the following sections in this exact order:
-1. Full Name
-2. Job Title
-3. Contact Information (email, phone, LinkedIn, location)
-4. Summary
-5. Skills (bullet points)
-6. Work Experience (reverse chronological, bullet points for achievements)
-7. Certifications
-8. Education
+- Ensure the following sections are included and appear in this exact order:
+1. Summary
+2. Skills (bullet points)
+3. Projects (bullet points)
+4. Work Experience (reverse chronological, bullet points for achievements)
+5. Certifications
+6. Education
 
 Do NOT include any introductory or closing text, explanations, or notes.
+Do NOT include the name, job title, or contact information.
 
 Job description:
 ${selectedText}
@@ -262,7 +372,6 @@ ${selectedText}
 Base CV:
 ${baseCV}`;
 
-    // Call Groq (OpenAI-compatible endpoint)
     const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -277,9 +386,9 @@ ${baseCV}`;
     });
 
     if (!resp.ok) {
-      let errText = await resp.text().catch(() => null);
+      let errText = await resp.text().catch(() => "No error message provided.");
       console.error("Groq API error:", resp.status, errText);
-      notifyTab(tab.id, `Groq API error: ${resp.status}`);
+      notifyTab(tab.id, `Groq API error: ${resp.status}. Check console for details.`);
       return;
     }
 
@@ -291,21 +400,16 @@ ${baseCV}`;
       return;
     }
 
-    // Strip any leading explanatory lines just in case
     const cleaned = stripModelIntro(raw);
 
-    // Render PDF to ArrayBuffer
-    const pdfArrayBuffer = renderCvToArrayBuffer(cleaned);
+    const personalDetails = { fullName, jobTitle, phoneNumber, email, location, linkedin, github };
+    const pdfArrayBuffer = renderCvToArrayBuffer(cleaned, personalDetails);
 
-    // Convert to data URI and download (avoid createObjectURL issues)
     const dataUrl = arrayBufferToDataUrl(pdfArrayBuffer, "application/pdf");
     chrome.downloads.download({ url: dataUrl, filename: "Tailored_CV.pdf" }, (downloadId) => {
       if (chrome.runtime.lastError) {
         console.error("chrome.downloads.download error:", chrome.runtime.lastError);
         notifyTab(tab.id, "Download failed. Check console for details.");
-      } else {
-        // optionally notify success
-        // notifyTab(tab.id, "Tailored CV downloaded.");
       }
     });
 
