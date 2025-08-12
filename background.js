@@ -36,22 +36,6 @@ function arrayBufferToDataUrl(arrayBuffer, mime = "application/pdf") {
   return `data:${mime};base64,${base64}`;
 }
 
-function isHeading(line) {
-  if (!line) return false;
-  const norm = line.trim().replace(/:$/, "").toLowerCase();
-  const headings = [
-    "summary", "personal statement", "skills", "key skills", "experience", "work experience",
-    "project", "projects", "education", "certifications", "certifications & training"
-  ];
-  return headings.includes(norm) || headings.some(h => norm.startsWith(h));
-}
-
-function isBullet(line) {
-  if (!line) return false;
-  const t = line.trim();
-  return t.startsWith("•") || t.startsWith("-") || t.startsWith("*") || /^\d+\./.test(t);
-}
-
 function stripModelIntro(text) {
   if (!text) return "";
   const introductoryPhrases = [
@@ -59,27 +43,21 @@ function stripModelIntro(text) {
     /^based on the information provided, here is a tailored cv:\s*/i,
     /^i have updated your cv based on the job description:\s*/i,
     /^below is the updated cv:\s*/i,
+    /^here's a tailored cv based on the provided information:\s*/i
   ];
-
   for (const phrase of introductoryPhrases) {
     if (phrase.test(text)) {
       return text.replace(phrase, '').trim();
     }
   }
-
-  const firstHeadingMatch = text.match(/^(summary|skills|project|projects|work experience|certifications|education)/i);
-  if (firstHeadingMatch) {
-    const headingIndex = text.indexOf(firstHeadingMatch[0]);
-    if (headingIndex > 0) {
-      return text.substring(headingIndex).trim();
-    }
-  }
-  
   return text.trim();
 }
 
-function renderCvToArrayBuffer(cvText, personalDetails) {
+function parseGroqResponseAndRender(groqResponse) {
   if (!jsPDFCtor) throw new Error("jsPDF not available");
+
+  const cleanedResponse = stripModelIntro(groqResponse);
+  const lines = cleanedResponse.split('\n');
 
   const doc = new jsPDFCtor({ unit: "pt", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -89,6 +67,7 @@ function renderCvToArrayBuffer(cvText, personalDetails) {
 
   const headingFontSize = 13;
   const nameFontSize = 16;
+  const jobTitleFontSize = 12;
   const bodyFontSize = 11;
   const lineGap = 6;
   const sectionGap = 18;
@@ -97,225 +76,171 @@ function renderCvToArrayBuffer(cvText, personalDetails) {
   const skillsVerticalGap = 4;
 
   let cursorY = margin;
+  let currentSection = null;
+  let skillsList = [];
+  let nameTitleAndContactHandled = false;
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(nameFontSize);
-  doc.text(personalDetails.fullName, margin, cursorY);
-  cursorY += nameFontSize + lineGap;
+  const flushSkills = () => {
+    if (skillsList.length === 0) return;
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(bodyFontSize);
-  doc.text(personalDetails.jobTitle, margin, cursorY);
-  cursorY += bodyFontSize + lineGap;
-  
-  const contactInfo = [
-    personalDetails.phoneNumber,
-    personalDetails.email,
-    personalDetails.location,
-    personalDetails.linkedin
-  ];
-  if (personalDetails.github) {
-    contactInfo.push(personalDetails.github);
-  }
-  doc.text(contactInfo.join(" • "), margin, cursorY);
-  cursorY += bodyFontSize + lineGap;
-  
-  cursorY += sectionGap;
+    let numColumns = 2;
+    const columnWidth = (usableWidth - skillsColumnGap) / numColumns;
+    const skillsPerColumn = Math.ceil(skillsList.length / numColumns);
+    
+    let columnYs = Array(numColumns).fill(cursorY);
+    
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(bodyFontSize);
+    doc.setLineHeightFactor(1.2);
 
-  const norm = cvText.replace(/\r/g, "");
-  const lines = norm.split("\n");
-  
-  let currentParagraph = [];
-  let currentHeading = "";
-  let isProjectsSection = false;
-  let projectsBuffer = [];
-  let projectTitle = null;
-  let projectDescription = [];
-
-  const flushParagraph = () => {
-    if (currentParagraph.length > 0) {
-      const paragraphText = currentParagraph.join(" ");
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(bodyFontSize);
-      const wrapped = doc.splitTextToSize(paragraphText, usableWidth);
-      for (const w of wrapped) {
-        if (cursorY > pageHeight - margin) {
-          doc.addPage();
-          cursorY = margin;
-        }
-        doc.text(w, margin, cursorY);
-        cursorY += bodyFontSize + lineGap;
+    for (let i = 0; i < skillsList.length; i++) {
+      const skillText = "• " + skillsList[i];
+      const colIndex = Math.floor(i / skillsPerColumn);
+      
+      const yPos = columnYs[colIndex];
+      
+      const wrapped = doc.splitTextToSize(skillText, columnWidth - 8);
+      
+      if (yPos + (wrapped.length * (bodyFontSize + skillsVerticalGap)) > pageHeight - margin) {
+        doc.addPage();
+        columnYs = Array(numColumns).fill(margin);
+        cursorY = margin;
+        columnYs[colIndex] = margin;
       }
-      currentParagraph = [];
-      cursorY += lineGap;
+
+      const xPos = margin + colIndex * (columnWidth + skillsColumnGap);
+      
+      for (const w of wrapped) {
+        doc.text(w, xPos, columnYs[colIndex]);
+        columnYs[colIndex] += bodyFontSize + skillsVerticalGap;
+      }
     }
+    
+    cursorY = Math.max(...columnYs) + sectionGap;
+    skillsList = [];
   };
+  
+  const isBullet = (line) => {
+    if (!line) return false;
+    const t = line.trim();
+    return t.startsWith("•") || t.startsWith("-") || t.startsWith("*") || /^\d+\./.test(t);
+  };
+  
+  const isHeading = (line) => {
+    return line.match(/^\*\*(.*)\*\*/);
+  };
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmedLine = line.trim();
+    
+    if (!trimmedLine) {
+      if (currentSection === "skills") {
+        flushSkills();
+      }
+      continue;
+    }
 
-  const renderProjects = () => {
-    if (projectsBuffer.length > 0) {
-      for (const project of projectsBuffer) {
-        // Render project title in bold
+    if (!nameTitleAndContactHandled) {
+      if (i === 0) {
+        const name = trimmedLine.replace(/\*\*/g, "").replace(/^\s*•\s*/, "");
         doc.setFont("helvetica", "bold");
+        doc.setFontSize(nameFontSize);
+        doc.text(name, margin, cursorY);
+        cursorY += nameFontSize + lineGap;
+        continue;
+      }
+      
+      if (i === 1) {
+        const title = trimmedLine.replace(/\*\*/g, "").replace(/^\s*•\s*/, "");
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(jobTitleFontSize);
+        doc.text(title, margin, cursorY);
+        cursorY += jobTitleFontSize + lineGap;
+        continue;
+      }
+      
+      if (i === 2) {
+        const contactInfo = trimmedLine.replace(/\*\*/g, "").replace(/\|/g, " | ");
+        doc.setFont("helvetica", "normal");
         doc.setFontSize(bodyFontSize);
-        const wrappedTitle = doc.splitTextToSize(project.title, usableWidth);
-        for (const w of wrappedTitle) {
-          if (cursorY > pageHeight - margin) {
-            doc.addPage();
-            cursorY = margin;
-          }
-          doc.text(w, margin, cursorY);
-          cursorY += bodyFontSize + lineGap;
-        }
-
-        // Render description in normal font
-        if (project.description.length > 0) {
-          const descriptionText = project.description.join(" ");
-          doc.setFont("helvetica", "normal");
-          const wrappedDesc = doc.splitTextToSize(descriptionText, usableWidth);
-          for (const w of wrappedDesc) {
+        const wrappedContent = doc.splitTextToSize(contactInfo, usableWidth);
+        for (const w of wrappedContent) {
             if (cursorY > pageHeight - margin) {
-              doc.addPage();
-              cursorY = margin;
+                doc.addPage();
+                cursorY = margin;
             }
             doc.text(w, margin, cursorY);
             cursorY += bodyFontSize + lineGap;
-          }
         }
-        cursorY += lineGap; // Extra space between projects
+        nameTitleAndContactHandled = true;
+        continue;
       }
-      projectsBuffer = [];
     }
-  };
-  
-  let skillsList = [];
-  const flushSkills = () => {
-    if (skillsList.length > 0) {
-      const numSkills = skillsList.length;
-      let numColumns = 1;
-      if (numSkills >= 15) numColumns = 3;
-      else if (numSkills >= 6) numColumns = 2;
-
-      const columnWidth = (usableWidth - skillsColumnGap * (numColumns - 1)) / numColumns;
-      const skillsPerColumn = Math.ceil(numSkills / numColumns);
-      
-      let columnStartY = cursorY;
-      
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(bodyFontSize);
-
-      for (let i = 0; i < numSkills; i++) {
-        const skillText = "• " + skillsList[i];
-        const colIndex = Math.floor(i / skillsPerColumn);
-        const rowIndex = i % skillsPerColumn;
-        
-        const xPos = margin + colIndex * (columnWidth + skillsColumnGap);
-        let yPos = columnStartY + rowIndex * (bodyFontSize + skillsVerticalGap);
-
-        if (yPos > pageHeight - margin) {
-            doc.addPage();
-            columnStartY = margin;
-            yPos = columnStartY + rowIndex * (bodyFontSize + skillsVerticalGap);
-        }
-        doc.text(skillText, xPos, yPos);
-      }
-      cursorY = Math.max(cursorY, columnStartY + skillsPerColumn * (bodyFontSize + skillsVerticalGap)) + lineGap;
-      skillsList = [];
-    }
-  };
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-
-    if (line === "") {
-      flushParagraph();
+    
+    const headingMatch = trimmedLine.match(/^\*\*(.*)\*\*/);
+    if (headingMatch) {
       flushSkills();
-      if (isProjectsSection && projectTitle) {
-        projectsBuffer.push({ title: projectTitle, description: projectDescription });
-        projectTitle = null;
-        projectDescription = [];
-      }
-      continue;
-    }
-
-    if (isHeading(line)) {
-      flushParagraph();
-      flushSkills();
-      if (isProjectsSection) {
-        if (projectTitle) {
-          projectsBuffer.push({ title: projectTitle, description: projectDescription });
-        }
-        renderProjects();
-      }
-      cursorY += sectionGap;
+      const headingText = headingMatch[1].trim().replace(/:$/, '');
       doc.setFont("helvetica", "bold");
       doc.setFontSize(headingFontSize);
-      doc.text(line.replace(/:$/, ""), margin, cursorY);
-      cursorY += headingFontSize + 6;
-      currentHeading = line.toLowerCase().trim();
-      isProjectsSection = (currentHeading === "project" || currentHeading === "projects");
-      continue;
-    }
-
-    if (currentHeading.startsWith("skills") && isBullet(line)) {
-      skillsList.push(line.replace(/^[-*•\s]*\s*/, ""));
+      cursorY += sectionGap;
+      doc.text(headingText, margin, cursorY);
+      cursorY += headingFontSize + lineGap;
+      currentSection = headingText.toLowerCase().trim().replace(/\s/g, "");
       continue;
     }
     
-    // NEW LOGIC: Projects section parsing that handles titles and descriptions
-    if (isProjectsSection) {
-      const colonIndex = line.indexOf(':');
-      if (colonIndex !== -1) {
-        // This line contains a project title and description
-        if (projectTitle) {
-          // Push previous project to buffer before starting a new one
-          projectsBuffer.push({ title: projectTitle, description: projectDescription });
-        }
-        projectTitle = line.substring(0, colonIndex).trim().replace(/^[-*•\s]*\s*/, "");
-        projectDescription = [line.substring(colonIndex + 1).trim().replace(/^[-*•\s]*\s*/, "")];
-      } else if (projectTitle) {
-        // Subsequent lines are part of the description for the current project
-        projectDescription.push(line.trim());
-      } else {
-        // First line in projects section without a colon is the first title
-        projectTitle = line.trim().replace(/^[-*•\s]*\s*/, "");
-        projectDescription = [];
+    if (isBullet(trimmedLine)) {
+      const bulletText = trimmedLine.replace(/^[-*•\s]*\s*/, "");
+      if (currentSection === "skills") {
+        skillsList.push(bulletText);
+        continue;
       }
-      continue;
-    }
-    
-    if (isBullet(line)) {
-      flushParagraph();
-      flushSkills();
+
       doc.setFont("helvetica", "normal");
       doc.setFontSize(bodyFontSize);
-      
-      const bulletText = line.replace(/^[-*•\s]*\s*/, "");
       const wrapped = doc.splitTextToSize(bulletText, usableWidth - bulletIndent);
-      for (const w of wrapped) {
+      
+      if (cursorY > pageHeight - margin) {
+        doc.addPage();
+        cursorY = margin;
+      }
+      doc.text("• " + wrapped[0], margin + bulletIndent, cursorY);
+      cursorY += bodyFontSize + lineGap;
+
+      for (let j = 1; j < wrapped.length; j++) {
         if (cursorY > pageHeight - margin) {
           doc.addPage();
           cursorY = margin;
         }
-        doc.text("• " + w, margin + bulletIndent, cursorY);
+        doc.text(wrapped[j], margin + bulletIndent, cursorY);
         cursorY += bodyFontSize + lineGap;
       }
       continue;
     }
     
-    currentParagraph.push(line);
-  }
-  
-  flushParagraph();
-  flushSkills();
-  if (isProjectsSection) {
-    if (projectTitle) {
-      projectsBuffer.push({ title: projectTitle, description: projectDescription });
+    if (trimmedLine) {
+        flushSkills();
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(bodyFontSize);
+        const wrapped = doc.splitTextToSize(trimmedLine, usableWidth);
+        for (const w of wrapped) {
+            if (cursorY > pageHeight - margin) {
+                doc.addPage();
+                cursorY = margin;
+            }
+            doc.text(w, margin, cursorY);
+            cursorY += bodyFontSize + lineGap;
+        }
     }
-    renderProjects();
   }
-  
+
+  flushSkills();
+
   return doc.output("arraybuffer");
 }
+
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
@@ -336,8 +261,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 
   try {
-    const store = await storageGet(["groqKey", "baseCV", "fullName", "jobTitle", "phoneNumber", "email", "location", "linkedin", "github"]);
-    const { groqKey, baseCV, fullName, jobTitle, phoneNumber, email, location, linkedin, github } = store;
+    const store = await storageGet(["groqKey", "baseCV"]);
+    const { groqKey, baseCV } = store;
 
     if (!groqKey) {
       notifyTab(tab.id, "Groq API key missing. Open extension settings and paste your key.");
@@ -347,24 +272,29 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       notifyTab(tab.id, "Base CV not found. Upload your base CV in the extension settings.");
       return;
     }
-    if (!fullName || !jobTitle || !phoneNumber || !email || !location || !linkedin) {
-      notifyTab(tab.id, "Personal details missing. Please fill in your name, job title, and contact info in the extension settings.");
-      return;
-    }
-
-    const prompt = `You are a CV tailoring assistant. Take the provided CV and job description, then rewrite the CV to:
+    
+    const prompt = `You are a CV tailoring assistant. Take the provided base CV and job description, then rewrite the CV to:
 - Match the role with relevant skills, experience, and keywords.
 - Maintain UK ATS-friendly standards.
+- Output the user's full name on the first line in **bold**.
+- Output a professional job title on the next line in **bold** and a smaller font size.
+- On the third line, output the contact information (email, phone, location, and social media links) in a normal font style.
+- Separate all contact details with a pipe character "|". Do not include any labels or headings for them.
+- Use **bold** for all other section headings like **Summary**, **Skills**, etc.
+- Use a single bullet point (•) for all list items. Ensure that each bullet point contains a complete thought or sentence, without breaking it up with extra bullet points or blank lines.
 - Ensure the following sections are included and appear in this exact order:
-1. Summary
-2. Skills (bullet points)
-3. Projects (bullet points)
-4. Work Experience (reverse chronological, bullet points for achievements)
-5. Certifications
-6. Education
+1. Full Name
+2. Job Title
+3. Contact Information (on a single line, separated by |)
+4. Summary
+5. Skills (bullet points)
+6. Projects (bullet points)
+7. Work Experience (reverse chronological, with job titles and bullet points for achievements)
+8. Certifications
+9. Education
 
 Do NOT include any introductory or closing text, explanations, or notes.
-Do NOT include the name, job title, or contact information.
+Your response should start directly with the user's full name.
 
 Job description:
 ${selectedText}
@@ -393,20 +323,17 @@ ${baseCV}`;
     }
 
     const data = await resp.json();
-    const raw = data.choices?.[0]?.message?.content || data.output?.[0]?.content || "";
+    const raw = data.choices?.[0]?.message?.content || "";
     if (!raw || raw.trim() === "") {
       console.error("Empty AI response:", data);
       notifyTab(tab.id, "AI returned no content. Try again or check your API key/quota.");
       return;
     }
-
-    const cleaned = stripModelIntro(raw);
-
-    const personalDetails = { fullName, jobTitle, phoneNumber, email, location, linkedin, github };
-    const pdfArrayBuffer = renderCvToArrayBuffer(cleaned, personalDetails);
+    
+    const pdfArrayBuffer = parseGroqResponseAndRender(raw);
 
     const dataUrl = arrayBufferToDataUrl(pdfArrayBuffer, "application/pdf");
-    chrome.downloads.download({ url: dataUrl, filename: "Tailored_CV.pdf" }, (downloadId) => {
+    chrome.downloads.download({ url: dataUrl, filename: `Tailored_CV.pdf` }, (downloadId) => {
       if (chrome.runtime.lastError) {
         console.error("chrome.downloads.download error:", chrome.runtime.lastError);
         notifyTab(tab.id, "Download failed. Check console for details.");
