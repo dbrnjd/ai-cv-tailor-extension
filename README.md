@@ -12,13 +12,13 @@
 
 This Chrome extension allows you to:
 
-\- Upload your base CV (PDF)
+- Upload your base CV (PDF)
 
-\- Select any job description text online
+- Select any job description text online
 
-\- Generate a tailored CV using Groq’s powerful open LLMs
+- Generate a tailored CV using Groq’s powerful open LLMs
 
-\- Download a clean, editable version (PDF/TXT)
+- Download a clean, structured PDF version directly
 
 
 
@@ -30,15 +30,13 @@ This Chrome extension allows you to:
 
 
 
-\- JavaScript (Vanilla)
+- JavaScript (Vanilla)
 
-\- Chrome Extension APIs
+- Chrome Extension APIs
 
-\- Groq LLM API
+- Groq LLM API
 
-\- PDF.js
-
-\- FileSaver.js
+- jsPDF
 
 
 
@@ -46,17 +44,17 @@ This Chrome extension allows you to:
 
 
 
-1\. Clone/download this repo
+1. Clone/download this repo
 
-2\. Open Chrome → `chrome://extensions/` → Enable Developer Mode
+2. Open Chrome → `chrome://extensions/` → Enable Developer Mode
 
-3\. Click "Load unpacked" → Select this folder
+3. Click "Load unpacked" → Select this folder
 
-4\. Open the extension popup → Paste your Groq API key \& upload your base CV
+4. Open the extension popup → Paste your Groq API key and upload your base CV
 
-5\. Highlight a job description online → Right-click → \*\*Tailor My CV\*\*
+5. Highlight a job description online → Right-click → **Tailor My CV**
 
-6\. Open the popup again → Download your tailored CV
+6. A PDF of your tailored CV will automatically download to your computer.
 
 
 
@@ -64,15 +62,11 @@ This Chrome extension allows you to:
 
 
 
-\- \[ ] Export to structured UK-style PDF
-
-\- \[ ] Add cover letter generation
-
-\- \[ ] Add UI/UX settings page
-
-\- \[ ] Publish to Chrome Web Store
-
-\- \[ ] Accept user donations (optional)
+- [x] Export to structured UK-style PDF
+- [ ] Add cover letter generation
+- [ ] Add UI/UX settings page
+- [ ] Publish to Chrome Web Store
+- [ ] Accept user donations (optional)
 
 
 
@@ -85,4 +79,3 @@ PRs welcome! Ideas, bugs, and feedback are appreciated.
 
 
 ---
-
